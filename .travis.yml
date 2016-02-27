@@ -5,7 +5,7 @@ env:
     - NOSE_NOLOGCAPTURE=true
     - NOSE_VERBOSE=2
     - NOSE_WITH_COVERAGE=true
-    - NOSE_COVER_PACKAGE=neovim
+    - NOSE_COVER_PACKAGE=neovim_gui
   matrix:
     - CI_TARGET=tests
 matrix:
@@ -14,15 +14,15 @@ matrix:
       env: CI_TARGET=flake
     - python: 3.4
       env: CI_TARGET=flake
-python:
+#python:
   # If the build matrix gets bigger, also update the number of runs
   # at the bottom of .scrutinizer.yml.
-  - 2.6
-  - 2.7
-  - 3.3
-  - 3.4
-  - 3.5
-  - pypy
+  #- 2.6
+  #- 2.7
+  #- 3.3
+  #- 3.4
+  #- 3.5
+  #- pypy
 before_install:
   - if [ $CI_TARGET = tests ]; then
       eval "$(curl -Ss https://raw.githubusercontent.com/neovim/bot-ci/master/scripts/travis-setup.sh) nightly-x64";
@@ -36,7 +36,7 @@ script:
   - if [ $CI_TARGET = tests ]; then
       NVIM_CHILD_ARGV='["nvim", "-u", "NONE", "--embed"]' nosetests;
     else
-      flake8 neovim;
+      flake8 neovim_gui;
     fi
 after_script:
   - if [ $CI_TARGET = tests ]; then

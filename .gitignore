@@ -1,7 +1,7 @@
 *.egg-info/
 __pycache__
-neovim/ui/screen.c
-neovim/ui/screen.so
+neovim_gui/screen.c
+neovim_gui/screen.so
 build/
 dist/
 *.pyc
