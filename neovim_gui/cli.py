@@ -4,9 +4,9 @@ import shlex
 import click
 
 from .ui_bridge import UIBridge
-from .. import attach
-from ..api import DecodeHook
-from ..compat import IS_PYTHON3
+from neovim import attach
+from neovim.api import DecodeHook
+from neovim.compat import IS_PYTHON3
 
 
 @click.command(context_settings=dict(allow_extra_args=True))
