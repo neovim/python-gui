@@ -88,9 +88,13 @@ class UIBridge(object):
                         # l = [','.join([str(a) for a in args])
                         #      for args in update[1:]]
                         # print >> sys.stderr, update[0], ' '.join(l)
-                        handler = getattr(self._ui, '_nvim_' + update[0])
-                        for args in update[1:]:
-                            handler(*args)
+                        try:
+                            handler = getattr(self._ui, '_nvim_' + update[0])
+                        except AttributeError:
+                            pass
+                        else:
+                            for args in update[1:]:
+                                handler(*args)
                 except:
                     self._error = format_exc()
                     self._call(self._nvim.quit)
