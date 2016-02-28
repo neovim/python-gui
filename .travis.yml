@@ -6,8 +6,8 @@ env:
     - NOSE_VERBOSE=2
     - NOSE_WITH_COVERAGE=true
     - NOSE_COVER_PACKAGE=neovim_gui
-  matrix:
-    - CI_TARGET=tests
+#  matrix:
+#    - CI_TARGET=tests
 matrix:
   include:
     - python: 2.7
@@ -23,6 +23,11 @@ matrix:
   #- 3.4
   #- 3.5
   #- pypy
+addons:
+  apt:
+    packages:
+      - python-gi
+      - python3-gi
 before_install:
   - if [ $CI_TARGET = tests ]; then
       eval "$(curl -Ss https://raw.githubusercontent.com/neovim/bot-ci/master/scripts/travis-setup.sh) nightly-x64";
