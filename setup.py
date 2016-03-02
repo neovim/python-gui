@@ -4,7 +4,7 @@ import sys
 from setuptools import setup
 
 install_requires = [
-    'neovim>=0.1.2',
+    'neovim>=0.1.3',
     'click>=3.0',
     'pygobject'
 ]
@@ -22,10 +22,10 @@ except ImportError:
 entry_points = {'console_scripts':  ['pynvim=neovim_gui.cli:main'] }
 
 setup(name='neovim_gui',
-      version='0.1.0',
+      version='0.1.1',
       description='Gtk gui for neovim',
       url='http://github.com/neovim/python-gui',
-      download_url='https://github.com/neovim/python-gui/archive/0.1.0.tar.gz',
+      download_url='https://github.com/neovim/python-gui/archive/0.1.1.tar.gz',
       author='Thiago de Arruda',
       author_email='tpadilha84@gmail.com',
       license='Apache',
