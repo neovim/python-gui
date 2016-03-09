@@ -57,6 +57,11 @@ KEY_TABLE = {
 if (GLib.MAJOR_VERSION, GLib.MINOR_VERSION,) <= (2, 32,):
     GLib.threads_init()
 
+def Rectangle(x,y,w,h):
+    r = Gdk.Rectangle()
+    r.x, r.y, r.width, r.height = x,y,w,h
+    return r
+
 
 class GtkUI(object):
 
@@ -97,12 +102,17 @@ class GtkUI(object):
         window.connect('configure-event', self._gtk_configure)
         window.connect('delete-event', self._gtk_quit)
         window.connect('key-press-event', self._gtk_key)
+        window.connect('key-release-event', self._gtk_key_release)
         window.connect('button-press-event', self._gtk_button_press)
         window.connect('button-release-event', self._gtk_button_release)
         window.connect('motion-notify-event', self._gtk_motion_notify)
         window.connect('scroll-event', self._gtk_scroll)
+        window.connect('focus-in-event', self._gtk_focus_in)
+        window.connect('focus-out-event', self._gtk_focus_out)
         window.show_all()
-        im_context = Gtk.IMContextSimple()
+        im_context = Gtk.IMMulticontext()
+        im_context.set_client_window(drawing_area.get_window())
+        im_context.set_use_preedit(False) #TODO: preedit at cursor position
         im_context.connect('commit', self._gtk_input)
         self._pango_context = drawing_area.create_pango_context()
         self._drawing_area = drawing_area
@@ -296,6 +306,8 @@ class GtkUI(object):
             row, col = self._screen.row, self._screen.col
             text, attrs = self._screen.get_cursor()
             self._pango_draw(row, col, [(text, attrs,)], cr=cr, cursor=True)
+            x, y = self._get_coords(row, col)
+            self._im_context.set_cursor_location(Rectangle(x, y, self._cell_pixel_width, self._cell_pixel_height))
 
     def _gtk_configure(self, widget, event):
         def resize(*args):
@@ -341,6 +353,9 @@ class GtkUI(object):
         input_str = _stringify_key(KEY_TABLE.get(key_name, key_name), state)
         self._bridge.input(input_str)
 
+    def _gtk_key_release(self, widget, event, *args):
+        self._im_context.filter_keypress(event)
+
     def _gtk_button_press(self, widget, event, *args):
         if not self._mouse_enabled or event.type != Gdk.EventType.BUTTON_PRESS:
             return
@@ -382,6 +397,12 @@ class GtkUI(object):
         input_str = _stringify_key(key, event.state)
         input_str += '<{0},{1}>'.format(col, row)
         self._bridge.input(input_str)
+
+    def _gtk_focus_in(self, *a):
+        self._im_context.focus_in()
+
+    def _gtk_focus_out(self, *a):
+        self._im_context.focus_out()
 
     def _gtk_input(self, widget, input_str, *args):
         self._bridge.input(input_str.replace('<', '<lt>'))
