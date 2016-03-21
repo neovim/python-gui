@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Pynvim
+Name=PyNvim
 GenericName=Text Editor
 GenericName[de]=Texteditor
 Comment=Edit text files
@@ -71,7 +71,7 @@ Comment[wa]=Asspougnî des fitchîs tecses
 Comment[zh_CN]=编辑文本文件
 Comment[zh_TW]=編輯文字檔
 TryExec=pynvim
-Exec=pynvim
+Exec=pynvim %F
 Terminal=false
 Type=Application
 Icon=pynvim
