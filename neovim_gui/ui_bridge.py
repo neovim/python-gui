@@ -51,7 +51,7 @@ class UIBridge(object):
         self._call(self._nvim.ui_detach)
 
     def _call(self, fn, *args):
-        self._nvim.session.threadsafe_call(fn, *args)
+        self._nvim.async_call(fn, *args)
 
     def _ui_event_loop(self):
         self._sem.acquire()
@@ -101,5 +101,5 @@ class UIBridge(object):
             if method == 'redraw':
                 self._ui.schedule_screen_update(apply_updates)
 
-        self._nvim.session.run(on_request, on_notification, on_setup)
+        self._nvim.run_loop(on_request, on_notification, on_setup)
         self._ui.quit()

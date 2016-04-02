@@ -5,7 +5,6 @@ import click
 
 from .ui_bridge import UIBridge
 from neovim import attach
-from neovim.api import DecodeHook
 from neovim.compat import IS_PYTHON3
 
 
@@ -59,9 +58,6 @@ def main(ctx, prog, notify, listen, connect, profile):
         # spawn embedded instance
         nvim_argv = shlex.split(prog or 'nvim --embed') + ctx.args
         nvim = attach('child', argv=nvim_argv)
-
-    if IS_PYTHON3:
-        nvim = nvim.with_hook(DecodeHook())
 
     from .gtk_ui import GtkUI
     ui = GtkUI()
