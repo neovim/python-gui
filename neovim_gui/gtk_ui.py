@@ -1,4 +1,5 @@
 """Neovim Gtk+ UI."""
+from __future__ import print_function, division
 import math
 
 import cairo
@@ -316,8 +317,8 @@ class GtkUI(object):
         def resize(*args):
             self._resize_timer_id = None
             width, height = self._window.get_size()
-            columns = width / self._cell_pixel_width
-            rows = height / self._cell_pixel_height
+            columns = width // self._cell_pixel_width
+            rows = height // self._cell_pixel_height
             if self._screen.columns == columns and self._screen.rows == rows:
                 return
             self._bridge.resize(columns, rows)
