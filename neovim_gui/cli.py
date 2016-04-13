@@ -13,12 +13,13 @@ from neovim.compat import IS_PYTHON3
 @click.option('--notify', '-n', default=False, is_flag=True)
 @click.option('--listen', '-l')
 @click.option('--connect', '-c')
+@click.option('--font', '-f', default=('Monospace', 13), nargs=2)
 @click.option('--profile',
               default='disable',
               type=click.Choice(['ncalls', 'tottime', 'percall', 'cumtime',
                                  'name', 'disable']))
 @click.pass_context
-def main(ctx, prog, notify, listen, connect, profile):
+def main(ctx, prog, notify, listen, connect, font, profile):
     """Entry point."""
     address = connect or listen
 
@@ -60,7 +61,7 @@ def main(ctx, prog, notify, listen, connect, profile):
         nvim = attach('child', argv=nvim_argv)
 
     from .gtk_ui import GtkUI
-    ui = GtkUI()
+    ui = GtkUI(font)
     bridge = UIBridge()
     bridge.connect(nvim, ui, profile if profile != 'disable' else None, notify)
 
