@@ -69,13 +69,13 @@ class GtkUI(object):
 
     """Gtk+ UI class."""
 
-    def __init__(self):
+    def __init__(self, font):
         """Initialize the UI instance."""
         self._redraw_arg = None
         self._foreground = -1
         self._background = -1
-        self._font_size = 13
-        self._font_name = 'Monospace'
+        self._font_name = font[0]
+        self._font_size = font[1]
         self._screen = None
         self._attrs = None
         self._busy = False
