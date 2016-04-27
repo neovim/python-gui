@@ -73,13 +73,14 @@ class GtkUI(object):
 
     """Gtk+ UI class."""
 
-    def __init__(self, font):
+    def __init__(self, config):
         """Initialize the UI instance."""
         self._redraw_arg = None
-        self._foreground = -1
-        self._background = -1
-        self._font_name = font[0]
-        self._font_size = font[1]
+        self._foreground = config.get('foreground', -1)
+        self._background = config.get('background', -1)
+        self._window_background = config.get('window_background', '#aaaaaa')
+        self._font_size = config.get('font_size', 13)
+        self._font_name = config.get('font_name', 'Monospace')
         self._screen = None
         self._attrs = None
         self._busy = False
@@ -115,6 +116,8 @@ class GtkUI(object):
         window.connect('scroll-event', self._gtk_scroll)
         window.connect('focus-in-event', self._gtk_focus_in)
         window.connect('focus-out-event', self._gtk_focus_out)
+        window.modify_bg(Gtk.StateType.NORMAL,
+                         Gdk.color_parse(self._window_background))
         window.show_all()
         im_context = Gtk.IMMulticontext()
         im_context.set_client_window(drawing_area.get_window())
