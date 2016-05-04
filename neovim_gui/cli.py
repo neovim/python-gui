@@ -53,20 +53,11 @@ def detach_proc(workdir='.', umask=0):
     else:
         REDIRECT_TO = "/dev/null"
 
-    try:
-        pid = os.fork()
-    except OSError, e:
-        raise Exception, "%s [%d]" % (e.strerror, e.errno)
-
+    pid = os.fork()
     if (pid == 0):
         os.setsid()
 
-        try:
-            pid = os.fork()
-
-        except OSError, e:
-            raise Exception, "%s [%d]" % (e.strerror, e.errno)
-
+        pid = os.fork()
         if (pid == 0):
             os.chdir(workdir)
             os.umask(umask)
