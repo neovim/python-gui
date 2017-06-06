@@ -4,7 +4,7 @@
 [![Scrutinizer Code Quality](https://scrutinizer-ci.com/g/neovim/python-gui/badges/quality-score.png?b=master)](https://scrutinizer-ci.com/g/neovim/python-gui/?branch=master)
 [![Code Coverage](https://scrutinizer-ci.com/g/neovim/python-gui/badges/coverage.png?b=master)](https://scrutinizer-ci.com/g/neovim/python-gui/?branch=master)
 
-Simple nvim gui implemented using Gtk
+Simple nvim gui implemented using Gtk. This repo is currently not maintained. Please see [Related Projects](https://github.com/neovim/neovim/wiki/Related-projects) for a list of GUI implementations.
 
 #### Installation
 
