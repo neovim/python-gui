@@ -1,7 +1,9 @@
 """Bridge for connecting a UI instance to nvim."""
 import sys
+import os
 from threading import Semaphore, Thread
 from traceback import format_exc
+from inspect import signature
 
 
 class UIBridge(object):
@@ -20,6 +22,7 @@ class UIBridge(object):
         self._ui = ui
         self._profile = profile
         self._sem = Semaphore(0)
+        self.debug_events = len(os.environ.get("NVIM_PYTHON_UI_DEBUG", "")) > 0
         t = Thread(target=self._nvim_event_loop)
         t.daemon = True
         t.start()
@@ -42,9 +45,9 @@ class UIBridge(object):
         """Send a resize request to nvim."""
         self._call(self._nvim.ui_try_resize, columns, rows)
 
-    def attach(self, columns, rows, rgb):
+    def attach(self, columns, rows, **options):
         """Attach the UI to nvim."""
-        self._call(self._nvim.ui_attach, columns, rows, rgb)
+        self._call(self._nvim.api.ui_attach, columns, rows, options)
 
     def detach(self):
         """Detach the UI from nvim."""
@@ -90,12 +93,17 @@ class UIBridge(object):
                         # print >> sys.stderr, update[0], ' '.join(l)
                         try:
                             handler = getattr(self._ui, '_nvim_' + update[0])
+                            nparam = len(signature(handler).parameters)
+
                         except AttributeError:
-                            pass
+                            if self.debug_events:
+                                print(repr(update), file=sys.stderr)
                         else:
+                            if self.debug_events and len(update[1]) > nparam:
+                                print(repr(update), file=sys.stderr)
                             for args in update[1:]:
-                                handler(*args)
-                except:
+                                handler(*args[:nparam])
+                except Exception:
                     self._error = format_exc()
                     self._call(self._nvim.quit)
             if method == 'redraw':

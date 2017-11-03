@@ -5,7 +5,6 @@ import click
 
 from .ui_bridge import UIBridge
 from neovim import attach
-from neovim.compat import IS_PYTHON3
 
 
 @click.command(context_settings=dict(allow_extra_args=True))
