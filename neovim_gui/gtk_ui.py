@@ -95,7 +95,7 @@ class GtkUI(object):
 
     def start(self, bridge):
         """Start the UI event loop."""
-        bridge.attach(80, 24, True)
+        bridge.attach(80, 24, rgb=True)
         drawing_area = Gtk.DrawingArea()
         drawing_area.connect('draw', self._gtk_draw)
         window = Gtk.Window()
@@ -378,6 +378,7 @@ class GtkUI(object):
         input_str += '<{0},{1}>'.format(col, row)
         self._bridge.input(input_str)
         self._pressed = button
+        return True
 
     def _gtk_button_release(self, widget, event, *args):
         self._pressed = None
