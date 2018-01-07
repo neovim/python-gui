@@ -5,6 +5,7 @@ import os
 import sys
 
 from functools import partial
+from types import SimpleNamespace
 
 import cairo
 
@@ -100,14 +101,29 @@ class GtkUI(object):
         self.grids = {}
         self.g = None
 
-    def create_drawing_area(self, handle):
+    def get_grid(self, handle):
+        if handle in self.grids:
+            return self.grids[handle]
         g = Grid()
         g.handle = handle
-        g._resize_timer_id = None
+        g._pending = [0, 0, 0]
+        g._screen = None
         drawing_area = Gtk.DrawingArea()
         drawing_area.connect('draw', partial(self._gtk_draw, g))
+        g._pango_context = drawing_area.create_pango_context()
+        g._drawing_area = drawing_area
+        g._window = None
+        g.options = None
+        self.grids[handle] = g
+        return g
+
+    def create_window(self, handle):
+        g = self.get_grid(handle)
+        g._resize_timer_id = None
         window = Gtk.Window()
-        window.add(drawing_area)
+        layout = Gtk.Fixed()
+        window.add(layout)
+        layout.put(g._drawing_area,0,0)
         window.set_events(window.get_events() |
                           Gdk.EventMask.BUTTON_PRESS_MASK |
                           Gdk.EventMask.BUTTON_RELEASE_MASK |
@@ -124,14 +140,9 @@ class GtkUI(object):
         window.connect('focus-in-event', self._gtk_focus_in)
         window.connect('focus-out-event', self._gtk_focus_out)
         window.show_all()
-        g._pango_context = drawing_area.create_pango_context()
-        g._drawing_area = drawing_area
         g._window = window
-        g._pending = [0, 0, 0]
-        g._screen = None
+        g._layout = layout
 
-        self.grids[handle] = g
-        return g
 
 
     def start(self, bridge):
@@ -148,8 +159,10 @@ class GtkUI(object):
         im_context.set_use_preedit(False)  # TODO: preedit at cursor position
         im_context.connect('commit', self._gtk_input)
         self._im_context = im_context
-        self.g = self.create_drawing_area(1)
+        self.create_window(1)
+        self.g = self.get_grid(1)
         self._window = self.g._window
+        self._layout = self.g._layout
         self._bridge = bridge
         Gtk.main()
 
@@ -168,19 +181,60 @@ class GtkUI(object):
         GObject.idle_add(wrapper)
 
     def _nvim_grid_cursor_goto(self, grid, row, col):
-        g = self.grids[grid]
+        g = self.get_grid(grid)
         self.g = g
         if g._screen is not None:
             # TODO: this should really be asserted on the nvim side
             row, col = min(row, g._screen.rows-1), min(col, g._screen.columns-1)
             g._screen.cursor_goto(row,col)
         self._window= self.g._window
+        self._screen = self.g._screen
+
+    def _nvim_float_info(self, win, handle, width, height, options):
+        g = self.get_grid(handle)
+        g.nvim_win = win
+        g.options = SimpleNamespace(**options)
+        self.configure_float(g)
+
+    def _nvim_float_close(self, win, handle):
+        g = self.get_grid(handle)
+
+        if g._window is not None:
+            g._layout.remove(g._drawing_area)
+            g._window.destroy()
+        elif g._drawing_area.get_parent() == self._layout:
+            self._layout.remove(g._drawing_area)
+
+    def configure_float(self, g):
+        if g.options.standalone:
+            if not g._window:
+                if g._drawing_area.get_parent() == self._layout:
+                    self._layout.remove(g._drawing_area)
+                self.create_window(g.handle)
+        else:
+            if g._window is not None:
+                g._layout.remove(g._drawing_area)
+                g._window.destroy()
+            # this is ugly, but I'm too lazy to refactor nvim_resize
+            # to fit the flow of information
+            if g._drawing_area.get_parent() != self._layout:
+                self._layout.add(g._drawing_area)
+                g._drawing_area.show()
+            if g._screen is not None:
+                x = g.options.x*self._cell_pixel_width
+                y = g.options.y*self._cell_pixel_height
+                w,h = g.pixel_size
+                if len(g.options.anchor) >= 2:
+                    if g.options.anchor[0] == 'S':
+                        y -= h
+                    if g.options.anchor[1] == 'E':
+                        x -= w
+                self._layout.move(g._drawing_area,x,y)
+
 
     def _nvim_grid_resize(self, grid, columns, rows):
         print("da")
-        if grid not in self.grids:
-            self.create_drawing_area(grid)
-        g = self.grids[grid]
+        g = self.get_grid(grid)
         da = g._drawing_area
         # create FontDescription object for the selected font/size
         font_str = '{0} {1}'.format(self._font_name, self._font_size)
@@ -205,7 +259,13 @@ class GtkUI(object):
         self._cell_pixel_width = cell_pixel_width
         self._cell_pixel_height = cell_pixel_height
         g._screen = Screen(columns, rows)
-        g._window.resize(pixel_width, pixel_height)
+        g._drawing_area.set_size_request(pixel_width, pixel_height)
+        g.pixel_size = pixel_width, pixel_height
+        if g.options is not None:
+            self.configure_float(g)
+
+        if g._window is not None:
+            g._window.resize(pixel_width, pixel_height)
 
     def _nvim_grid_clear(self, grid):
         g = self.grids[grid]
