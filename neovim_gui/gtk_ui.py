@@ -91,14 +91,14 @@ class GtkUI(object):
         self._resize_timer_id = None
         self._pressed = None
         self._invalid = None
-        self._pending = [0, 0, 0]
         self._reset_cache()
+        self._attr_defs = {}
 
     def start(self, bridge):
         """Start the UI event loop."""
         debug_ext_env = os.environ.get("NVIM_PYTHON_UI_DEBUG_EXT", "")
         extra_exts = {x:True for x in debug_ext_env.split(",") if x}
-        bridge.attach(80, 24, rgb=True, **extra_exts)
+        bridge.attach(80, 24, rgb=True, ext_linegrid=True, **extra_exts)
         drawing_area = Gtk.DrawingArea()
         drawing_area.connect('draw', self._gtk_draw)
         window = Gtk.Window()
@@ -138,7 +138,6 @@ class GtkUI(object):
         """Schedule screen updates to run in the UI event loop."""
         def wrapper():
             apply_updates()
-            self._flush()
             self._start_blinking()
             self._screen_invalid()
         GObject.idle_add(wrapper)
@@ -146,7 +145,8 @@ class GtkUI(object):
     def _screen_invalid(self):
         self._drawing_area.queue_draw()
 
-    def _nvim_resize(self, columns, rows):
+    def _nvim_grid_resize(self, grid, columns, rows):
+        assert grid == 1
         da = self._drawing_area
         # create FontDescription object for the selected font/size
         font_str = '{0} {1}'.format(self._font_name, self._font_size)
@@ -173,17 +173,12 @@ class GtkUI(object):
         self._screen = Screen(columns, rows)
         self._window.resize(pixel_width, pixel_height)
 
-    def _nvim_clear(self):
+    def _nvim_grid_clear(self, grid):
         self._clear_region(self._screen.top, self._screen.bot + 1,
                            self._screen.left, self._screen.right + 1)
         self._screen.clear()
 
-    def _nvim_eol_clear(self):
-        row, col = self._screen.row, self._screen.col
-        self._clear_region(row, row + 1, col, self._screen.right + 1)
-        self._screen.eol_clear()
-
-    def _nvim_cursor_goto(self, row, col):
+    def _nvim_grid_cursor_goto(self, grid, row, col):
         self._screen.cursor_goto(row, col)
 
     def _nvim_busy_start(self):
@@ -201,18 +196,12 @@ class GtkUI(object):
     def _nvim_mode_change(self, mode):
         self._insert_cursor = mode == 'insert'
 
-    def _nvim_set_scroll_region(self, top, bot, left, right):
-        self._screen.set_scroll_region(top, bot, left, right)
-
-    def _nvim_scroll(self, count):
-        self._flush()
-        top, bot = self._screen.top, self._screen.bot + 1
-        left, right = self._screen.left, self._screen.right + 1
+    def _nvim_grid_scroll(self, grid, top, bot, left, right, rows, cols):
         # The diagrams below illustrate what will happen, depending on the
         # scroll direction. "=" is used to represent the SR(scroll region)
         # boundaries and "-" the moved rectangles. note that dst and src share
         # a common region
-        if count > 0:
+        if rows > 0:
             # move an rectangle in the SR up, this can happen while scrolling
             # down
             # +-------------------------+
@@ -224,8 +213,8 @@ class GtkUI(object):
             # |-------------------------| dst_bot    |
             # | src (cleared)           |            |
             # +=========================+ src_bot
-            src_top, src_bot = top + count, bot
-            dst_top, dst_bot = top, bot - count
+            src_top, src_bot = top + rows, bot
+            dst_top, dst_bot = top, bot - rows
             clr_top, clr_bot = dst_bot, src_bot
         else:
             # move a rectangle in the SR down, this can happen while scrolling
@@ -239,8 +228,8 @@ class GtkUI(object):
             # |=========================| dst_bot    |
             # | (clipped below SR)      |            v
             # +-------------------------+
-            src_top, src_bot = top, bot + count
-            dst_top, dst_bot = top - count, bot
+            src_top, src_bot = top, bot + rows
+            dst_top, dst_bot = top - rows, bot
             clr_top, clr_bot = src_top, dst_top
         self._cairo_surface.flush()
         self._cairo_context.save()
@@ -255,21 +244,50 @@ class GtkUI(object):
         self._cairo_context.restore()
         # Clear the emptied region
         self._clear_region(clr_top, clr_bot, left, right)
-        self._screen.scroll(count)
+        self._screen.scroll(rows)
 
-    def _nvim_highlight_set(self, attrs):
-        self._attrs = self._get_pango_attrs(attrs)
+    def _nvim_hl_attr_define(self, hlid, attr, cterm_attr, info):
+        self._attr_defs[hlid] = attr
 
-    def _nvim_put(self, text):
-        if self._screen.row != self._pending[0]:
-            # flush pending text if jumped to a different row
-            self._flush()
-        # work around some redraw glitches that can happen
-        self._redraw_glitch_fix()
+    def _nvim_grid_line(self, grid, row, col_start, cells):
+        assert grid == 1
+
         # Update internal screen
-        self._screen.put(self._get_pango_text(text), self._attrs)
-        self._pending[1] = min(self._screen.col - 1, self._pending[1])
-        self._pending[2] = max(self._screen.col, self._pending[2])
+        col = col_start
+        attr = None # will be set in first cell
+        for cell in cells:
+            text = cell[0]
+            if len(cell) > 1:
+                hl_id = cell[1]
+                attr = self._get_pango_attrs(hl_id)
+            repeat = cell[2] if len(cell) > 2 else 1
+            for i in range(repeat):
+                self._screen.put(row, col, self._get_pango_text(text), attr)
+                col += 1
+        col_end = col
+
+        # work around some redraw glitches that can happen
+        col_start, col_end = self._redraw_glitch_fix(row, col_start, col_end)
+
+        self._cairo_context.save()
+        ccol = col_start
+        buf = []
+        bold = False
+        for _, col, text, attrs in self._screen.iter(row, row, col_start,
+                                                     col_end - 1):
+            newbold = attrs and 'bold' in attrs[0]
+            if newbold != bold or not text:
+                if buf:
+                    self._pango_draw(row, ccol, buf)
+                bold = newbold
+                buf = [(text, attrs,)]
+                ccol = col
+            else:
+                buf.append((text, attrs,))
+        if buf:
+            self._pango_draw(row, ccol, buf)
+        self._cairo_context.restore()
+
 
     def _nvim_bell(self):
         self._window.get_window().beep()
@@ -277,11 +295,8 @@ class GtkUI(object):
     def _nvim_visual_bell(self):
         pass
 
-    def _nvim_update_fg(self, fg):
+    def _nvim_default_colors_set(self, fg, bg, sp, cterm_fg, cterm_bg):
         self._foreground = fg
-        self._reset_cache()
-
-    def _nvim_update_bg(self, bg):
         self._background = bg
         self._reset_cache()
 
@@ -430,7 +445,6 @@ class GtkUI(object):
         blink()
 
     def _clear_region(self, top, bot, left, right):
-        self._flush()
         self._cairo_context.save()
         self._mask_region(top, bot, left, right)
         r, g, b = _split_color(self._background)
@@ -456,37 +470,11 @@ class GtkUI(object):
         y = row * self._cell_pixel_height
         return x, y
 
-    def _flush(self):
-        row, startcol, endcol = self._pending
-        self._pending[0] = self._screen.row
-        self._pending[1] = self._screen.col
-        self._pending[2] = self._screen.col
-        if startcol == endcol:
-            return
-        self._cairo_context.save()
-        ccol = startcol
-        buf = []
-        bold = False
-        for _, col, text, attrs in self._screen.iter(row, row, startcol,
-                                                     endcol - 1):
-            newbold = attrs and 'bold' in attrs[0]
-            if newbold != bold or not text:
-                if buf:
-                    self._pango_draw(row, ccol, buf)
-                bold = newbold
-                buf = [(text, attrs,)]
-                ccol = col
-            else:
-                buf.append((text, attrs,))
-        if buf:
-            self._pango_draw(row, ccol, buf)
-        self._cairo_context.restore()
-
     def _pango_draw(self, row, col, data, cr=None, cursor=False):
         markup = []
         for text, attrs in data:
             if not attrs:
-                attrs = self._get_pango_attrs(None)
+                attrs = self._get_pango_attrs(0)
             attrs = attrs[1] if cursor else attrs[0]
             markup.append('<span {0}>{1}</span>'.format(attrs, text))
         markup = ''.join(markup)
@@ -511,10 +499,10 @@ class GtkUI(object):
             self._pango_text_cache[text] = rv
         return rv
 
-    def _get_pango_attrs(self, attrs):
-        key = tuple(sorted((k, v,) for k, v in (attrs or {}).items()))
-        rv = self._pango_attrs_cache.get(key, None)
+    def _get_pango_attrs(self, hl_id):
+        rv = self._pango_attrs_cache.get(hl_id, None)
         if rv is None:
+            attrs = self._attr_defs.get(hl_id, {})
             fg = self._foreground if self._foreground != -1 else 0
             bg = self._background if self._background != -1 else 0xffffff
             n = {
@@ -548,36 +536,31 @@ class GtkUI(object):
             n = ' '.join(['{0}="{1}"'.format(k, v) for k, v in n.items()])
             c = ' '.join(['{0}="{1}"'.format(k, v) for k, v in c.items()])
             rv = (n, c,)
-            self._pango_attrs_cache[key] = rv
+            self._pango_attrs_cache[hl_id] = rv
         return rv
 
     def _reset_cache(self):
         self._pango_text_cache = {}
         self._pango_attrs_cache = {}
 
-    def _redraw_glitch_fix(self):
-        row, col = self._screen.row, self._screen.col
-        text, attrs = self._screen.get_cursor()
+    def _redraw_glitch_fix(self, row, col_start, col_end):
         # when updating cells in italic or bold words, the result can become
         # messy(characters can be clipped or leave remains when removed). To
         # prevent that, always update non empty sequences of cells and the
         # surrounding space.
         # find the start of the sequence
-        lcol = col - 1
-        while lcol >= 0:
-            text, _ = self._screen.get_cell(row, lcol)
-            lcol -= 1
+        while col_start-1 >= 0:
+            text, _ = self._screen.get_cell(row, col_start-1)
             if text == ' ':
                 break
-        self._pending[1] = min(lcol + 1, self._pending[1])
+            col_start -= 1
         # find the end of the sequence
-        rcol = col + 1
-        while rcol < self._screen.columns:
-            text, _ = self._screen.get_cell(row, rcol)
-            rcol += 1
+        while col_end < self._screen.columns:
+            text, _ = self._screen.get_cell(row, col_end)
             if text == ' ':
                 break
-        self._pending[2] = max(rcol, self._pending[2])
+            col_end += 1
+        return col_start, col_end
 
 
 def _split_color(n):

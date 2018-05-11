@@ -88,11 +88,10 @@ class Screen(object):
         for row in range(stop, stop + count, step):
             self._clear_region(row, row, left, right)
 
-    def put(self, text, attrs):
+    def put(self, row, col, text, attrs):
         """Put character on virtual cursor position."""
-        cell = self._cells[self.row][self.col]
+        cell = self._cells[row][col]
         cell.set(text, attrs)
-        self.cursor_goto(self.row, self.col + 1)
 
     def get_cell(self, row, col):
         """Get text, attrs at row, col."""
