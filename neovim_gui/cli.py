@@ -4,7 +4,7 @@ import shlex
 import click
 
 from .ui_bridge import UIBridge
-from neovim import attach
+from neovim import attach, setup_logging
 
 
 @click.command(context_settings=dict(allow_extra_args=True))
@@ -21,6 +21,8 @@ from neovim import attach
 def main(ctx, prog, notify, listen, connect, font, profile):
     """Entry point."""
     address = connect or listen
+
+    setup_logging("gtk_ui")
 
     if address:
         import re
