@@ -22,7 +22,11 @@ class UIBridge(object):
         self._ui = ui
         self._profile = profile
         self._sem = Semaphore(0)
-        self.debug_events = len(os.environ.get("NVIM_PYTHON_UI_DEBUG", "")) > 0
+        debug_env = os.environ.get("NVIM_PYTHON_UI_DEBUG", "")
+        if debug_env == "2":
+            self.debug_events = 2
+        else:
+            self.debug_events = len(debug_env) > 0
         t = Thread(target=self._nvim_event_loop)
         t.daemon = True
         t.start()
@@ -97,12 +101,14 @@ class UIBridge(object):
 
                         except AttributeError:
                             if self.debug_events:
-                                print(repr(update), file=sys.stderr)
+                                print(repr(update), file=sys.stdout)
                         else:
-                            if self.debug_events and len(update[1]) > nparam:
-                                print(repr(update), file=sys.stderr)
+                            if self.debug_events == 2 or (self.debug_events and len(update[1]) > nparam):
+                                print(repr(update), file=sys.stdout)
                             for args in update[1:]:
                                 handler(*args[:nparam])
+                    if self.debug_events == 2:
+                        print("<flush>")
                 except Exception:
                     self._error = format_exc()
                     self._call(self._nvim.quit)
