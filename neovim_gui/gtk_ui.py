@@ -1,6 +1,7 @@
 """Neovim Gtk+ UI."""
 from __future__ import print_function, division
 import math
+import os
 
 import cairo
 
@@ -95,7 +96,9 @@ class GtkUI(object):
 
     def start(self, bridge):
         """Start the UI event loop."""
-        bridge.attach(80, 24, rgb=True)
+        debug_ext_env = os.environ.get("NVIM_PYTHON_UI_DEBUG_EXT", "")
+        extra_exts = {x:True for x in debug_ext_env.split(",") if x}
+        bridge.attach(80, 24, rgb=True, **extra_exts)
         drawing_area = Gtk.DrawingArea()
         drawing_area.connect('draw', self._gtk_draw)
         window = Gtk.Window()

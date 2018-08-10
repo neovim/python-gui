@@ -23,10 +23,12 @@ class UIBridge(object):
         self._profile = profile
         self._sem = Semaphore(0)
         debug_env = os.environ.get("NVIM_PYTHON_UI_DEBUG", "")
+        debug_ext_env = os.environ.get("NVIM_PYTHON_UI_DEBUG_EXT", "")
+        self.debug_ext = len(debug_ext_env) > 0
         if debug_env == "2":
             self.debug_events = 2
         else:
-            self.debug_events = len(debug_env) > 0
+            self.debug_events = len(debug_env) > 0 or self.debug_ext
         t = Thread(target=self._nvim_event_loop)
         t.daemon = True
         t.start()
@@ -107,7 +109,7 @@ class UIBridge(object):
                                 print(repr(update), file=sys.stdout)
                             for args in update[1:]:
                                 handler(*args[:nparam])
-                    if self.debug_events == 2:
+                    if self.debug_events == 2 or self.debug_ext:
                         print("<flush>")
                 except Exception:
                     self._error = format_exc()
