@@ -4,7 +4,7 @@ import sys
 from setuptools import setup
 
 install_requires = [
-    'neovim>=0.1.3',
+    'pynvim>=0.1.3',
     'click>=3.0',
     'pygobject'
 ]
