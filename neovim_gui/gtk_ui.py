@@ -2,6 +2,9 @@
 from __future__ import print_function, division
 import math
 import os
+import sys
+
+from functools import partial
 
 import cairo
 
@@ -69,6 +72,8 @@ def Rectangle(x, y, w, h):
     r.x, r.y, r.width, r.height = x, y, w, h
     return r
 
+class Grid(object):
+    pass
 
 class GtkUI(object):
 
@@ -81,26 +86,25 @@ class GtkUI(object):
         self._background = -1
         self._font_name = font[0]
         self._font_size = font[1]
-        self._screen = None
         self._attrs = None
         self._busy = False
-        self._mouse_enabled = False
+        self._mouse_enabled = True
         self._insert_cursor = False
         self._blink = False
         self._blink_timer_id = None
-        self._resize_timer_id = None
         self._pressed = None
         self._invalid = None
-        self._pending = [0, 0, 0]
         self._reset_cache()
+        self._attr_defs = {}
+        self.grids = {}
+        self.g = None
 
-    def start(self, bridge):
-        """Start the UI event loop."""
-        debug_ext_env = os.environ.get("NVIM_PYTHON_UI_DEBUG_EXT", "")
-        extra_exts = {x:True for x in debug_ext_env.split(",") if x}
-        bridge.attach(80, 24, rgb=True, **extra_exts)
+    def create_drawing_area(self, handle):
+        g = Grid()
+        g.handle = handle
+        g._resize_timer_id = None
         drawing_area = Gtk.DrawingArea()
-        drawing_area.connect('draw', self._gtk_draw)
+        drawing_area.connect('draw', partial(self._gtk_draw, g))
         window = Gtk.Window()
         window.add(drawing_area)
         window.set_events(window.get_events() |
@@ -108,25 +112,39 @@ class GtkUI(object):
                           Gdk.EventMask.BUTTON_RELEASE_MASK |
                           Gdk.EventMask.POINTER_MOTION_MASK |
                           Gdk.EventMask.SCROLL_MASK)
-        window.connect('configure-event', self._gtk_configure)
+        window.connect('configure-event', partial(self._gtk_configure, g))
         window.connect('delete-event', self._gtk_quit)
         window.connect('key-press-event', self._gtk_key)
         window.connect('key-release-event', self._gtk_key_release)
-        window.connect('button-press-event', self._gtk_button_press)
-        window.connect('button-release-event', self._gtk_button_release)
-        window.connect('motion-notify-event', self._gtk_motion_notify)
-        window.connect('scroll-event', self._gtk_scroll)
+        window.connect('button-press-event', partial(self._gtk_button_press, g))
+        window.connect('button-release-event', partial(self._gtk_button_release, g))
+        window.connect('motion-notify-event', partial(self._gtk_motion_notify, g))
+        window.connect('scroll-event', partial(self._gtk_scroll, g))
         window.connect('focus-in-event', self._gtk_focus_in)
         window.connect('focus-out-event', self._gtk_focus_out)
         window.show_all()
+        g._pango_context = drawing_area.create_pango_context()
+        g._drawing_area = drawing_area
+        g._window = window
+        g._pending = [0, 0, 0]
+        g._screen = None
+
+        self.grids[handle] = g
+        return g
+
+
+    def start(self, bridge):
+        """Start the UI event loop."""
+        debug_ext_env = os.environ.get("NVIM_PYTHON_UI_DEBUG_EXT", "")
+        opts = {x:True for x in debug_ext_env.split(",") if x}
+        self.has_float = bool(opts.get('ext_float'))
+        bridge.attach(80, 24, rgb=True, ext_multigrid=True, **opts)
         im_context = Gtk.IMMulticontext()
-        im_context.set_client_window(drawing_area.get_window())
         im_context.set_use_preedit(False)  # TODO: preedit at cursor position
         im_context.connect('commit', self._gtk_input)
-        self._pango_context = drawing_area.create_pango_context()
-        self._drawing_area = drawing_area
-        self._window = window
         self._im_context = im_context
+        self.g = self.create_drawing_area(1)
+        self._window = self.g._window
         self._bridge = bridge
         Gtk.main()
 
@@ -138,16 +156,27 @@ class GtkUI(object):
         """Schedule screen updates to run in the UI event loop."""
         def wrapper():
             apply_updates()
-            self._flush()
             self._start_blinking()
-            self._screen_invalid()
+            self._im_context.set_client_window(self.g._drawing_area.get_window())
+            for g in self.grids.values():
+                g._drawing_area.queue_draw()
         GObject.idle_add(wrapper)
 
-    def _screen_invalid(self):
-        self._drawing_area.queue_draw()
+    def _nvim_grid_cursor_goto(self, grid, row, col):
+        g = self.grids[grid]
+        self.g = g
+        if g._screen is not None:
+            # TODO: this should really be asserted on the nvim side
+            row, col = min(row, g._screen.rows-1), min(col, g._screen.columns-1)
+            g._screen.cursor_goto(row,col)
+        self._window= self.g._window
 
-    def _nvim_resize(self, columns, rows):
-        da = self._drawing_area
+    def _nvim_grid_resize(self, grid, columns, rows):
+        print("da")
+        if grid not in self.grids:
+            self.create_drawing_area(grid)
+        g = self.grids[grid]
+        da = g._drawing_area
         # create FontDescription object for the selected font/size
         font_str = '{0} {1}'.format(self._font_name, self._font_size)
         self._font, pixels, normal_width, bold_width = _parse_font(font_str)
@@ -160,31 +189,25 @@ class GtkUI(object):
         pixel_height = cell_pixel_height * rows
         gdkwin = da.get_window()
         content = cairo.CONTENT_COLOR
-        self._cairo_surface = gdkwin.create_similar_surface(content,
+        g._cairo_surface = gdkwin.create_similar_surface(content,
                                                             pixel_width,
                                                             pixel_height)
-        self._cairo_context = cairo.Context(self._cairo_surface)
-        self._pango_layout = PangoCairo.create_layout(self._cairo_context)
-        self._pango_layout.set_alignment(Pango.Alignment.LEFT)
-        self._pango_layout.set_font_description(self._font)
-        self._pixel_width, self._pixel_height = pixel_width, pixel_height
+        g._cairo_context = cairo.Context(g._cairo_surface)
+        g._pango_layout = PangoCairo.create_layout(g._cairo_context)
+        g._pango_layout.set_alignment(Pango.Alignment.LEFT)
+        g._pango_layout.set_font_description(self._font)
+        g._pixel_width, g._pixel_height = pixel_width, pixel_height
         self._cell_pixel_width = cell_pixel_width
         self._cell_pixel_height = cell_pixel_height
-        self._screen = Screen(columns, rows)
-        self._window.resize(pixel_width, pixel_height)
+        g._screen = Screen(columns, rows)
+        g._window.resize(pixel_width, pixel_height)
 
-    def _nvim_clear(self):
-        self._clear_region(self._screen.top, self._screen.bot + 1,
-                           self._screen.left, self._screen.right + 1)
-        self._screen.clear()
+    def _nvim_grid_clear(self, grid):
+        g = self.grids[grid]
+        self._clear_region(g, g._screen.top, g._screen.bot + 1,
+                           g._screen.left, g._screen.right + 1)
+        g._screen.clear()
 
-    def _nvim_eol_clear(self):
-        row, col = self._screen.row, self._screen.col
-        self._clear_region(row, row + 1, col, self._screen.right + 1)
-        self._screen.eol_clear()
-
-    def _nvim_cursor_goto(self, row, col):
-        self._screen.cursor_goto(row, col)
 
     def _nvim_busy_start(self):
         self._busy = True
@@ -201,18 +224,13 @@ class GtkUI(object):
     def _nvim_mode_change(self, mode):
         self._insert_cursor = mode == 'insert'
 
-    def _nvim_set_scroll_region(self, top, bot, left, right):
-        self._screen.set_scroll_region(top, bot, left, right)
-
-    def _nvim_scroll(self, count):
-        self._flush()
-        top, bot = self._screen.top, self._screen.bot + 1
-        left, right = self._screen.left, self._screen.right + 1
+    def _nvim_grid_scroll(self, grid, top, bot, left, right, rows, cols):
+        g = self.grids[grid]
         # The diagrams below illustrate what will happen, depending on the
         # scroll direction. "=" is used to represent the SR(scroll region)
         # boundaries and "-" the moved rectangles. note that dst and src share
         # a common region
-        if count > 0:
+        if rows > 0:
             # move an rectangle in the SR up, this can happen while scrolling
             # down
             # +-------------------------+
@@ -224,8 +242,8 @@ class GtkUI(object):
             # |-------------------------| dst_bot    |
             # | src (cleared)           |            |
             # +=========================+ src_bot
-            src_top, src_bot = top + count, bot
-            dst_top, dst_bot = top, bot - count
+            src_top, src_bot = top + rows, bot
+            dst_top, dst_bot = top, bot - rows
             clr_top, clr_bot = dst_bot, src_bot
         else:
             # move a rectangle in the SR down, this can happen while scrolling
@@ -239,37 +257,70 @@ class GtkUI(object):
             # |=========================| dst_bot    |
             # | (clipped below SR)      |            v
             # +-------------------------+
-            src_top, src_bot = top, bot + count
-            dst_top, dst_bot = top - count, bot
+            src_top, src_bot = top, bot + rows
+            dst_top, dst_bot = top - rows, bot
             clr_top, clr_bot = src_top, dst_top
-        self._cairo_surface.flush()
-        self._cairo_context.save()
+        g._cairo_surface.flush()
+        g._cairo_context.save()
         # The move is performed by setting the source surface to itself, but
         # with a coordinate transformation.
         _, y = self._get_coords(dst_top - src_top, 0)
-        self._cairo_context.set_source_surface(self._cairo_surface, 0, y)
+        g._cairo_context.set_source_surface(g._cairo_surface, 0, y)
         # Clip to ensure only dst is affected by the change
-        self._mask_region(dst_top, dst_bot, left, right)
+        self._mask_region(g, dst_top, dst_bot, left, right)
         # Do the move
-        self._cairo_context.paint()
-        self._cairo_context.restore()
+        g._cairo_context.paint()
+        g._cairo_context.restore()
         # Clear the emptied region
-        self._clear_region(clr_top, clr_bot, left, right)
-        self._screen.scroll(count)
+        self._clear_region(g, clr_top, clr_bot, left, right)
+        g._screen.scroll(rows)
 
-    def _nvim_highlight_set(self, attrs):
-        self._attrs = self._get_pango_attrs(attrs)
+    def _nvim_hl_attr_define(self, hlid, attr, cterm_attr, info):
+        self._attr_defs[hlid] = attr
 
-    def _nvim_put(self, text):
-        if self._screen.row != self._pending[0]:
-            # flush pending text if jumped to a different row
-            self._flush()
-        # work around some redraw glitches that can happen
-        self._redraw_glitch_fix()
+    def _nvim_grid_line(self, grid, row, col_start, cells):
+
         # Update internal screen
-        self._screen.put(self._get_pango_text(text), self._attrs)
-        self._pending[1] = min(self._screen.col - 1, self._pending[1])
-        self._pending[2] = max(self._screen.col, self._pending[2])
+
+        g = self.grids[grid]
+        screen = self.grids[grid]._screen
+        # TODO: delet this
+        # Update internal screen
+        col = col_start
+        attr = None # will be set in first cell
+        for cell in cells:
+            text = cell[0]
+            if len(cell) > 1:
+                hl_id = cell[1]
+                attr = self._get_pango_attrs(hl_id)
+            repeat = cell[2] if len(cell) > 2 else 1
+            for i in range(repeat):
+                screen.put(row, col, self._get_pango_text(text), attr)
+                col += 1
+        col_end = col
+
+        # work around some redraw glitches that can happen
+        col_start, col_end = self._redraw_glitch_fix(g, row, col_start, col_end)
+
+        g._cairo_context.save()
+        ccol = col_start
+        buf = []
+        bold = False
+        for _, col, text, attrs in screen.iter(row, row, col_start,
+                                                     col_end - 1):
+            newbold = attrs and 'bold' in attrs[0]
+            if newbold != bold or not text:
+                if buf:
+                    self._pango_draw(g, row, ccol, buf)
+                bold = newbold
+                buf = [(text, attrs,)]
+                ccol = col
+            else:
+                buf.append((text, attrs,))
+        if buf:
+            self._pango_draw(g, row, ccol, buf)
+        g._cairo_context.restore()
+
 
     def _nvim_bell(self):
         self._window.get_window().beep()
@@ -277,11 +328,8 @@ class GtkUI(object):
     def _nvim_visual_bell(self):
         pass
 
-    def _nvim_update_fg(self, fg):
+    def _nvim_default_colors_set(self, fg, bg, sp, cterm_fg, cterm_bg):
         self._foreground = fg
-        self._reset_cache()
-
-    def _nvim_update_bg(self, bg):
         self._background = bg
         self._reset_cache()
 
@@ -294,50 +342,52 @@ class GtkUI(object):
     def _nvim_set_icon(self, icon):
         self._window.set_icon_name(icon)
 
-    def _gtk_draw(self, wid, cr):
-        if not self._screen:
+    def _gtk_draw(self, g, wid, cr):
+        if not g._screen:
             return
         # from random import random
         # cr.rectangle(0, 0, self._pixel_width, self._pixel_height)
         # cr.set_source_rgb(random(), random(), random())
         # cr.fill()
-        self._cairo_surface.flush()
+        g._cairo_surface.flush()
         cr.save()
-        cr.rectangle(0, 0, self._pixel_width, self._pixel_height)
+
+        cr.rectangle(0, 0, g._pixel_width, g._pixel_height)
         cr.clip()
-        cr.set_source_surface(self._cairo_surface, 0, 0)
+        cr.set_source_surface(g._cairo_surface, 0, 0)
         cr.paint()
         cr.restore()
-        if not self._busy and self._blink:
+        if not self._busy and self._blink and g is self.g:
             # Cursor is drawn separately in the window. This approach is
             # simpler because it doesn't taint the internal cairo surface,
             # which is used for scrolling
-            row, col = self._screen.row, self._screen.col
-            text, attrs = self._screen.get_cursor()
-            self._pango_draw(row, col, [(text, attrs,)], cr=cr, cursor=True)
+            row, col = g._screen.row, g._screen.col
+            text, attrs = g._screen.get_cursor()
+            self._pango_draw(g, row, col, [(text, attrs,)], cr=cr, cursor=True)
             x, y = self._get_coords(row, col)
             currect = Rectangle(x, y, self._cell_pixel_width,
                                 self._cell_pixel_height)
             self._im_context.set_cursor_location(currect)
 
-    def _gtk_configure(self, widget, event):
+    def _gtk_configure(self, g, widget, event):
         def resize(*args):
             self._resize_timer_id = None
-            width, height = self._window.get_size()
+            width, height = g._window.get_size()
             columns = width // self._cell_pixel_width
             rows = height // self._cell_pixel_height
-            if self._screen.columns == columns and self._screen.rows == rows:
+            if g._screen.columns == columns and g._screen.rows == rows:
                 return
-            self._bridge.resize(columns, rows)
+            ## TODO: this must tell the grid
+            self._bridge.resize(g.handle, columns, rows)
 
-        if not self._screen:
+        if not g._screen:
             return
-        if event.width == self._pixel_width and \
-           event.height == self._pixel_height:
+        if event.width == g._pixel_width and \
+           event.height == g._pixel_height:
             return
-        if self._resize_timer_id is not None:
-            GLib.source_remove(self._resize_timer_id)
-        self._resize_timer_id = GLib.timeout_add(250, resize)
+        if g._resize_timer_id is not None:
+            GLib.source_remove(g._resize_timer_id)
+        g._resize_timer_id = GLib.timeout_add(250, resize)
 
     def _gtk_quit(self, *args):
         self._bridge.exit()
@@ -367,7 +417,7 @@ class GtkUI(object):
     def _gtk_key_release(self, widget, event, *args):
         self._im_context.filter_keypress(event)
 
-    def _gtk_button_press(self, widget, event, *args):
+    def _gtk_button_press(self, g, widget, event, *args):
         if not self._mouse_enabled or event.type != Gdk.EventType.BUTTON_PRESS:
             return
         button = 'Left'
@@ -378,24 +428,31 @@ class GtkUI(object):
         col = int(math.floor(event.x / self._cell_pixel_width))
         row = int(math.floor(event.y / self._cell_pixel_height))
         input_str = _stringify_key(button + 'Mouse', event.state)
-        input_str += '<{0},{1}>'.format(col, row)
+        if self.has_float:
+            input_str += '<{},{},{}>'.format(g.handle, col, row)
+        else:
+            input_str += '<{},{}>'.format(col, row)
+        print(input_str,file=sys.stderr)
         self._bridge.input(input_str)
         self._pressed = button
         return True
 
-    def _gtk_button_release(self, widget, event, *args):
+    def _gtk_button_release(self, g, widget, event, *args):
         self._pressed = None
 
-    def _gtk_motion_notify(self, widget, event, *args):
+    def _gtk_motion_notify(self, g, widget, event, *args):
         if not self._mouse_enabled or not self._pressed:
             return
         col = int(math.floor(event.x / self._cell_pixel_width))
         row = int(math.floor(event.y / self._cell_pixel_height))
         input_str = _stringify_key(self._pressed + 'Drag', event.state)
-        input_str += '<{0},{1}>'.format(col, row)
+        if self.has_float:
+            input_str += '<{},{},{}>'.format(g.handle, col, row)
+        else:
+            input_str += '<{},{}>'.format(col, row)
         self._bridge.input(input_str)
 
-    def _gtk_scroll(self, widget, event, *args):
+    def _gtk_scroll(self, g, widget, event, *args):
         if not self._mouse_enabled:
             return
         col = int(math.floor(event.x / self._cell_pixel_width))
@@ -407,7 +464,7 @@ class GtkUI(object):
         else:
             return
         input_str = _stringify_key(key, event.state)
-        input_str += '<{0},{1}>'.format(col, row)
+        input_str += '<{},{},{}>'.format(g.handle, col, row)
         self._bridge.input(input_str)
 
     def _gtk_focus_in(self, *a):
@@ -422,26 +479,24 @@ class GtkUI(object):
     def _start_blinking(self):
         def blink(*args):
             self._blink = not self._blink
-            self._screen_invalid()
+            self.g._drawing_area.queue_draw()
             self._blink_timer_id = GLib.timeout_add(500, blink)
         if self._blink_timer_id:
             GLib.source_remove(self._blink_timer_id)
         self._blink = False
         blink()
 
-    def _clear_region(self, top, bot, left, right):
-        self._flush()
-        self._cairo_context.save()
-        self._mask_region(top, bot, left, right)
-        r, g, b = _split_color(self._background)
-        r, g, b = r / 255.0, g / 255.0, b / 255.0
-        self._cairo_context.set_source_rgb(r, g, b)
-        self._cairo_context.paint()
-        self._cairo_context.restore()
+    def _clear_region(self, g, top, bot, left, right):
+        g._cairo_context.save()
+        self._mask_region(g, top, bot, left, right)
+        red, green, blue = _split_color(self._background)
+        red, green, blue = red / 255.0, green / 255.0, blue / 255.0
+        g._cairo_context.set_source_rgb(red, green, blue)
+        g._cairo_context.paint()
+        g._cairo_context.restore()
 
-    def _mask_region(self, top, bot, left, right, cr=None):
-        if not cr:
-            cr = self._cairo_context
+    def _mask_region(self, g, top, bot, left, right):
+        cr = g._cairo_context
         x1, y1, x2, y2 = self._get_rect(top, bot, left, right)
         cr.rectangle(x1, y1, x2 - x1, y2 - y1)
         cr.clip()
@@ -456,53 +511,27 @@ class GtkUI(object):
         y = row * self._cell_pixel_height
         return x, y
 
-    def _flush(self):
-        row, startcol, endcol = self._pending
-        self._pending[0] = self._screen.row
-        self._pending[1] = self._screen.col
-        self._pending[2] = self._screen.col
-        if startcol == endcol:
-            return
-        self._cairo_context.save()
-        ccol = startcol
-        buf = []
-        bold = False
-        for _, col, text, attrs in self._screen.iter(row, row, startcol,
-                                                     endcol - 1):
-            newbold = attrs and 'bold' in attrs[0]
-            if newbold != bold or not text:
-                if buf:
-                    self._pango_draw(row, ccol, buf)
-                bold = newbold
-                buf = [(text, attrs,)]
-                ccol = col
-            else:
-                buf.append((text, attrs,))
-        if buf:
-            self._pango_draw(row, ccol, buf)
-        self._cairo_context.restore()
-
-    def _pango_draw(self, row, col, data, cr=None, cursor=False):
+    def _pango_draw(self, g, row, col, data, cr=None, cursor=False):
         markup = []
         for text, attrs in data:
             if not attrs:
-                attrs = self._get_pango_attrs(None)
+                attrs = self._get_pango_attrs(0)
             attrs = attrs[1] if cursor else attrs[0]
             markup.append('<span {0}>{1}</span>'.format(attrs, text))
         markup = ''.join(markup)
-        self._pango_layout.set_markup(markup, -1)
+        g._pango_layout.set_markup(markup, -1)
         # Draw the text
         if not cr:
-            cr = self._cairo_context
+            cr = g._cairo_context
         x, y = self._get_coords(row, col)
-        if cursor and self._insert_cursor:
+        if cursor and self._insert_cursor and g is self.g:
             cr.rectangle(x, y, self._cell_pixel_width / 4,
                          self._cell_pixel_height)
             cr.clip()
         cr.move_to(x, y)
-        PangoCairo.update_layout(cr, self._pango_layout)
-        PangoCairo.show_layout(cr, self._pango_layout)
-        _, r = self._pango_layout.get_pixel_extents()
+        PangoCairo.update_layout(cr, g._pango_layout)
+        PangoCairo.show_layout(cr, g._pango_layout)
+        _, r = g._pango_layout.get_pixel_extents()
 
     def _get_pango_text(self, text):
         rv = self._pango_text_cache.get(text, None)
@@ -511,10 +540,10 @@ class GtkUI(object):
             self._pango_text_cache[text] = rv
         return rv
 
-    def _get_pango_attrs(self, attrs):
-        key = tuple(sorted((k, v,) for k, v in (attrs or {}).items()))
-        rv = self._pango_attrs_cache.get(key, None)
+    def _get_pango_attrs(self, hl_id):
+        rv = self._pango_attrs_cache.get(hl_id, None)
         if rv is None:
+            attrs = self._attr_defs.get(hl_id, {})
             fg = self._foreground if self._foreground != -1 else 0
             bg = self._background if self._background != -1 else 0xffffff
             n = {
@@ -548,36 +577,31 @@ class GtkUI(object):
             n = ' '.join(['{0}="{1}"'.format(k, v) for k, v in n.items()])
             c = ' '.join(['{0}="{1}"'.format(k, v) for k, v in c.items()])
             rv = (n, c,)
-            self._pango_attrs_cache[key] = rv
+            self._pango_attrs_cache[hl_id] = rv
         return rv
 
     def _reset_cache(self):
         self._pango_text_cache = {}
         self._pango_attrs_cache = {}
 
-    def _redraw_glitch_fix(self):
-        row, col = self._screen.row, self._screen.col
-        text, attrs = self._screen.get_cursor()
+    def _redraw_glitch_fix(self, g, row, col_start, col_end):
         # when updating cells in italic or bold words, the result can become
         # messy(characters can be clipped or leave remains when removed). To
         # prevent that, always update non empty sequences of cells and the
         # surrounding space.
         # find the start of the sequence
-        lcol = col - 1
-        while lcol >= 0:
-            text, _ = self._screen.get_cell(row, lcol)
-            lcol -= 1
+        while col_start-1 >= 0:
+            text, _ = g._screen.get_cell(row, col_start-1)
             if text == ' ':
                 break
-        self._pending[1] = min(lcol + 1, self._pending[1])
+            col_start -= 1
         # find the end of the sequence
-        rcol = col + 1
-        while rcol < self._screen.columns:
-            text, _ = self._screen.get_cell(row, rcol)
-            rcol += 1
+        while col_end < g._screen.columns:
+            text, _ = g._screen.get_cell(row, col_end)
             if text == ' ':
                 break
-        self._pending[2] = max(rcol, self._pending[2])
+            col_end += 1
+        return col_start, col_end
 
 
 def _split_color(n):
